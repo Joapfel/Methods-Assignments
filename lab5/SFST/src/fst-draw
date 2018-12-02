@@ -1,0 +1,208 @@
+#!/usr/bin/perl -w
+# -*-cperl-*-
+## Render compiled SFST (or source) with GraphViz
+## Version 2.0
+##   - adapted to different fst-print output format
+##   - support for UTF-8 character set (default); expects dot and gs to default to UTF-8
+##   - output format now defaults to PDF generated directly by GraphViz
+
+use FileHandle;
+use Getopt::Long;
+use Encode;
+
+use warnings;
+
+$View = 0;                                      # --view
+$Dot = 0;                                       # --dot
+$EPS = 0;                                       # --eps
+$PDF = 0;                                       # --pdf
+$Bitmap = 0;                                    # --bitmap
+$All = 0;                                       # --all
+$EpsString = undef;                             # --null
+$Labels = 0;                                    # --labels
+$Charset = "utf8";                              # --charset
+$Font = undef;                                  # --font
+$Quiet = 0;                                     # --quiet
+$Help = 0;                                      # --help
+
+$ok = GetOptions(
+                 "view|v" => \$View,
+                 "dot|d" => \$Dot,
+                 "eps|e" => \$EPS,
+                 "pdf|p" => \$PDF,
+                 "bitmap|b" => \$Bitmap,
+                 "all|a" => \$All,
+                 "null|0=s" => \$EpsString,
+                 "labels|l" => \$Labels,
+                 "charset|c=s" => \$Charset,
+                 "font|f=s" => \$Font,
+                 "quiet|q" => \$Quiet,
+                 "help|h" => \$Help,
+                 );
+
+die
+  "\n",
+  "Usage:   fst-draw [options] <file>\n\n",
+  "Options:\n",
+  "  --view, -v    view FST diagram (gv)\n",
+  "  --dot, -d     generate GraphViz input file\n",
+  "  --pdf, -p     generate PDF file [default]\n",
+  "  --eps, -e     generate EPS file\n",
+  "  --bitmap, -b  render as PNG bitmap (pstoimg)\n",
+  "  --all, -a     generate all formats\n",
+  "  --null <s>,   show eps-transitions as <s> [default: <>]\n",
+  "    -0 <s>\n",
+  "  --labels, -l  show node labels (numbers)\n",
+  "  --charset <s>,character encoding of FST [default: utf8]\n",
+  "    -c <s>\n",
+  "  --font <s>,   set font for node and edge labels\n",
+  "    -f <s>\n",     
+  "  --quiet, -q   run silent (no terminal output)\n",
+  "  --help, -h    this help page\n\n",
+  "Output file names are automatically derived from the data file,\n",
+  "which must have the extension .dat (compiled FST) or .fst (FST\n",
+  "grammar file). In the latter case, fst-compiler will be run first.\n\n",
+  "[requires: fst-compiler-utf8 + fst-print (SFST), dot (GraphViz),\n",
+  "           pstoimg (latex2html package), gv (PS viewer)]\n",
+  "Version: 2.0\n"
+  unless $ok and @ARGV == 1 and not $Help;
+
+$PDF = 1                                        # default: --pdf (if no other formats are specified)
+  unless $View or $Dot or $EPS or $Bitmap;
+$EPS = $Dot = $PDF = $Bitmap = 1
+  if $All;
+if (defined $EpsString) {
+  $EpsString = decode("utf8", $EpsString);
+}
+
+$datafile = shift @ARGV;
+$datafile =~ /\.(dat|fst)$/
+  or die "Error: input file must have extension .fst or .dat\n";
+$basename = $`;
+$ext = $1;
+
+$tmpbase = "/tmp/fst2dot.$$";      # basename for intermediate files (in /tmp)
+
+## run fst-compiler on grammar file if necessary (otherwise copy to /tmp dir)
+##   (file.fst -> file.dat)
+if ($ext eq "fst") {
+  $utf8 = ($Charset =~ /^utf-?8$/i) ? "-utf8" : "";
+  run_command("fst-compiler$utf8 $datafile $tmpbase.dat");
+}
+else {
+  run_command("cp -p $datafile $tmpbase.dat");
+}
+
+print "$datafile\n"
+  unless $Quiet;
+
+## dump compiled FST and convert to .dot specification
+##   (file.dat -> file.dot)
+$fh = new FileHandle "fst-print $tmpbase.dat", "-|:encoding($Charset)"
+  or die "Can't dump FST from $tmpbase.dat: $!";
+$ofh = new FileHandle "$tmpbase.dot", ">:encoding(utf8)"
+  or die "Can't open output file $tmpbase.dot: $!";
+print $ofh "digraph fst {\n";
+print $ofh "\trankdir=LR\n";
+$nodesize = ($Labels) ? .5 : .1;
+printf $ofh "\tnode [shape=circle,height=$nodesize,fixedsize=true]\n";
+print $ofh "\tnode [label=\"\"]\n"
+  unless $Labels;
+if (defined $Font) {
+  print $ofh "\t node [fontname=\"$Font\"]\n";
+  print $ofh "\tedge [fontname=\"$Font\"]\n";
+}
+print $ofh "\t0 [style=bold]\n";
+while (<$fh>) {
+  chomp;  
+  ($from, $to, $input, $output) = split /\t/;
+  if (not defined $to) {
+    print $ofh "\t$from [shape=doublecircle]\n";
+  }
+  else {
+    if (defined $EpsString) {      
+      $input  = $EpsString if $input eq "<>";
+      $output = $EpsString if $output eq "<>";
+    }
+    if ($input eq $output) {
+      print $ofh "\t $from -> $to [label = \"$input\"]\n";
+    }
+    else {
+      print $ofh "\t $from -> $to [label = \"$input:$output\"]\n";
+    }
+#    print $ofh "\n";
+  }
+}
+print $ofh "}\n";
+$ofh->close;
+$fh->close;
+
+if ($Dot) {
+  run_command("cp -p $tmpbase.dot $basename.dot");
+  print "|- $basename.dot\n"
+    unless $Quiet;
+}
+
+## render .dot file as PostScript image (--eps option)
+##   (file.dot -> file.eps)
+if ($EPS) {
+  run_command("dot -Tps -o $tmpbase.eps $tmpbase.dot");
+  run_command("cp -p $tmpbase.eps $basename.eps");
+  print "|- $basename.eps\n"
+    unless $Quiet;
+}
+
+## render .dot file as PDF (new default)
+##   (file.dot -> file.pdf)
+run_command("dot -Tpdf -o $tmpbase.pdf $tmpbase.dot")
+  if $PDF or $Bitmap or $View;
+if ($PDF) {
+  run_command("cp -p $tmpbase.pdf $basename.pdf");
+  print "|- $basename.pdf\n"
+    unless $Quiet;
+}
+
+## convert PDF file to bitmap image (--bitmap option)
+##   (file.pdf -> file.png)
+if ($Bitmap) {
+  run_command("pstoimg -antialias -scale 2 -type png $tmpbase.pdf");
+  run_command("cp -p $tmpbase.png $basename.png");
+  print "|- $basename.png\n"
+    unless $Quiet;
+}
+
+## view .pdf image with gv (--view option)
+if ($View) {
+  print " \\_ <viewer> \n"
+    unless $Quiet;
+  run_command("gv $tmpbase.pdf");
+  print "    (done)\n"
+    unless $Quiet;
+}
+
+## clean up intermediate files in /tmp
+run_command("rm -f $tmpbase.*");
+
+
+######################################################################
+
+## SUB: run_command($cmd);
+##   (execute shell command $cmd silently with some error checks)
+sub run_command {
+  my $cmd = shift;
+  my $tmp = "/tmp/fst2dot.$$.output";
+  my $status = system "$cmd > $tmp 2>\&1";
+  my $exit_code = $status >> 8;
+  if ($status != 0) {
+    print STDERR "COMMAND: $cmd\n";
+    print STDERR "OUTPUT:\n";
+    print STDERR `cat $tmp`;
+  }
+  unlink $tmp;
+  if ($status != 0) {
+    if ($tmpbase) {
+      system "rm -f $tmpbase.* >/dev/null 2>\&1"; # clean up intermediate files
+    } 
+    die "Error: command execution failed (exit code $exit_code).\n";
+  }
+}

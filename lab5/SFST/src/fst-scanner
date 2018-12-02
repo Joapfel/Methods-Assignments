@@ -1,0 +1,20 @@
+#!/bin/bash
+
+if [ ! \( $# -ge 1 -a $# -le 3 \) ]
+  then
+  echo "Usage:  fst-scanner source.fst [input.txt]"
+  exit 1
+fi
+
+tmpfile="/tmp/fst$$"
+
+echo "\$FST\$ = \"<$tmpfile.dat>\"" > $tmpfile.fst
+echo "" >> $tmpfile.fst
+echo '{\<\[}:<> $FST$ {\]\>}:<>' >> $tmpfile.fst
+
+fst-compiler-utf8 -q "$1" $tmpfile.dat &&
+fst-compiler-utf8 -q -c $tmpfile.fst $tmpfile.ca &&
+fst-match -q $tmpfile.ca $2 $3 &&
+rm -f $tmpfile.*
+
+

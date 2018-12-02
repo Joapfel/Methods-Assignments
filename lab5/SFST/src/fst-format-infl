@@ -1,0 +1,28 @@
+#!/usr/bin/perl -w
+# -*-cperl-*-
+## Pretty-print output of fst-infl
+
+die "Usage:  fst-infl ... | format-infl.perl | ...\n"
+  if @ARGV;
+
+while (<>) {
+  chomp;
+  die "Format error: expected prompt line '> ...'\n[line #$.: $_]\n"
+    unless s/^\>\s*//;
+  $input = $_;
+  @analyses = ();
+  while (<>) {
+    last if /^\>/;
+    next if /^no result for/;
+    chomp;
+    push @analyses, $_;
+  }
+  push @analyses, "*" x 10
+    unless @analyses;
+  $first = shift @analyses;
+  printf "%-20s  %s\n", $input, $first;
+  foreach $analysis (@analyses) {
+    printf "%20s  %s\n", "", $analysis;
+  }
+  redo if $_;
+}
